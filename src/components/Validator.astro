@@ -1,0 +1,897 @@
+---
+const starterUrls = ["https://example.com", "https://juanzurita.dev"];
+---
+
+<div class="validator-shell">
+	<div class="hero-panel">
+		<div class="icon-stack" aria-hidden="true">
+			<svg viewBox="0 0 452 520" {...Astro.props}>
+				<path fill="#e34f26" d="M41 460L0 0h451l-41 460-185 52" />
+				<path fill="#ef652a" d="M226 472l149-41 35-394H226" />
+				<path
+					fill="#ecedee"
+					d="M226 208h-75l-5-58h80V94H84l15 171h127zm0 147l-64-17-4-45h-56l7 89 117 32z"
+				/>
+				<path fill="#fff" d="M226 265h69l-7 73-62 17v59l115-32 16-174H226zm0-171v56h136l5-56z" />
+			</svg>
+
+			<svg viewBox="0 0 512 512" {...Astro.props}>
+				<path fill="#264de4" d="M71.357 460.819 30.272 0h451.456l-41.129 460.746L255.724 512z" />
+				<path fill="#2965f1" d="m405.388 431.408 35.148-393.73H256v435.146z" />
+				<path
+					fill="#ebebeb"
+					d="m124.46 208.59 5.065 56.517H256V208.59zm-5.041-57.875H256V94.197H114.281zM256 355.372l-.248.066-62.944-16.996-4.023-45.076h-56.736l7.919 88.741 115.772 32.14.26-.073z"
+				/>
+				<path
+					fill="#fff"
+					d="M255.805 208.59v56.517H325.4l-6.56 73.299-63.035 17.013v58.8l115.864-32.112.85-9.549 13.28-148.792 1.38-15.176 10.203-114.393H255.805v56.518h79.639L330.3 208.59z"
+				/>
+			</svg>
+		</div>
+
+		<div class="hero-copy">
+			<div class="hero-row">
+				<p class="eyebrow">Dual validator</p>
+				<button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">
+					Dark mode
+				</button>
+			</div>
+			<h1>Validate HTML and CSS for many URLs at once.</h1>
+			<p class="lede">
+				Paste one URL per line, or separate them with commas and spaces. Each page is checked by
+				the HTML and CSS validators at the same time, then summarized as a card.
+			</p>
+		</div>
+	</div>
+
+	<form id="validator-form" class="validator-form">
+		<label for="urls">Target URLs</label>
+		<p class="field-help">Enter to validate. Shift+Enter, Ctrl+Enter, or Cmd+Enter inserts a new line.</p>
+		<textarea
+			id="urls"
+			name="urls"
+			rows="6"
+			spellcheck="false"
+			autocomplete="off"
+			placeholder="https://example.com\nhttps://developer.mozilla.org"
+		>
+{starterUrls.join("\n")}</textarea>
+		<div class="form-actions">
+			<button type="submit" class="primary">Validate pages</button>
+			<button type="button" id="fill-example" class="secondary">Load sample URLs</button>
+			<button type="button" id="clear-urls" class="secondary">Clear</button>
+		</div>
+		<p id="status" class="status" aria-live="polite">Ready for input.</p>
+	</form>
+
+	<section class="results-header">
+		<div>
+			<p class="section-label">Results</p>
+			<h2>Per-page HTML and CSS reports</h2>
+		</div>
+		<p class="section-hint">Cards update as soon as each page finishes both requests.</p>
+	</section>
+
+	<section id="results" class="results-grid" aria-live="polite" aria-busy="false"></section>
+</div>
+
+<script>
+	const form = document.getElementById("validator-form");
+	const urlsField = document.getElementById("urls");
+	const results = document.getElementById("results");
+	const status = document.getElementById("status");
+	const fillExampleButton = document.getElementById("fill-example");
+	const clearUrlsButton = document.getElementById("clear-urls");
+	const themeToggle = document.getElementById("theme-toggle");
+	const rootElement = document.documentElement;
+	const themeStorageKey = "dual-validator-theme";
+
+	const exampleUrls = ["https://example.com", "https://developer.mozilla.org"];
+
+	function normalizeUrl(value) {
+		const trimmed = value.trim().replace(/^["'(<\[]+|["')>\]]+$/g, "");
+
+		if (!trimmed) {
+			return "";
+		}
+
+		const withProtocol = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+		try {
+			return new URL(withProtocol).href;
+		} catch {
+			return "";
+		}
+	}
+
+	function insertTextAtCursor(element, text) {
+		const start = element.selectionStart ?? element.value.length;
+		const end = element.selectionEnd ?? element.value.length;
+		const nextValue = `${element.value.slice(0, start)}${text}${element.value.slice(end)}`;
+		element.value = nextValue;
+		const nextCursor = start + text.length;
+		element.setSelectionRange(nextCursor, nextCursor);
+	}
+
+	function getPreferredTheme() {
+		try {
+			const storedTheme = window.localStorage.getItem(themeStorageKey);
+			if (storedTheme === "light" || storedTheme === "dark") {
+				return storedTheme;
+			}
+		} catch {
+			// Ignore storage failures and fall back to the system theme.
+		}
+
+		return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+	}
+
+	function applyTheme(theme) {
+		rootElement.dataset.theme = theme;
+		themeToggle.textContent = theme === "dark" ? "☀️" : "🌙";
+		themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
+
+		try {
+			window.localStorage.setItem(themeStorageKey, theme);
+		} catch {
+			// Ignore storage failures.
+		}
+	}
+
+	function parseUrls(rawValue) {
+		const candidates = rawValue
+			.split(/[\n,]+/)
+			.flatMap((chunk) => chunk.split(/\s+/))
+			.map((candidate) => normalizeUrl(candidate))
+			.filter(Boolean);
+
+		return [...new Set(candidates)];
+	}
+
+	function toArray(value) {
+		if (Array.isArray(value)) {
+			return value;
+		}
+
+		if (value === undefined || value === null || value === "") {
+			return [];
+		}
+
+		return [value];
+	}
+
+	function summarizeHtml(response) {
+		const messages = Array.isArray(response?.messages) ? response.messages : [];
+		const errors = messages.filter((message) => message.type === "error");
+		const warnings = messages.filter((message) => message.type === "info" || message.type === "warning");
+
+		return {
+			valid: errors.length === 0,
+			errors,
+			warnings,
+			count: messages.length,
+		};
+	}
+
+	function summarizeCss(response) {
+		const root = response?.cssvalidation ?? response ?? {};
+		const result = root.result ?? {};
+		const errors = toArray(root.errors);
+		const warnings = toArray(root.warnings);
+		const errorCount = typeof result.errorcount === "number" ? result.errorcount : errors.length;
+		const warningCount = typeof result.warningcount === "number" ? result.warningcount : warnings.length;
+
+		return {
+			valid: root.validity !== false && errorCount === 0,
+			errors,
+			warnings,
+			errorCount,
+			warningCount,
+		};
+	}
+
+	function messageText(entry) {
+		if (!entry || typeof entry !== "object") {
+			return String(entry ?? "");
+		}
+
+		const parts = [];
+
+		if (entry.line) {
+			parts.push(`Line ${entry.line}`);
+		}
+
+		if (entry.message) {
+			parts.push(entry.message);
+		} else if (entry.msg) {
+			parts.push(entry.msg);
+		}
+
+		return parts.join(": ") || "No details provided.";
+	}
+
+	function statusPill(label, variant) {
+		const pill = document.createElement("span");
+		pill.className = `pill pill-${variant}`;
+		pill.textContent = label;
+		return pill;
+	}
+
+	function buildMessageList(title, items, tone) {
+		const section = document.createElement("section");
+		section.className = `message-block message-${tone}`;
+
+		const heading = document.createElement("h4");
+		heading.textContent = `${title} (${items.length})`;
+		section.appendChild(heading);
+
+		if (items.length === 0) {
+			const empty = document.createElement("p");
+			empty.className = "empty-note";
+			empty.textContent = `No ${tone} reported.`;
+			section.appendChild(empty);
+			return section;
+		}
+
+		const list = document.createElement("ul");
+		list.className = "message-list";
+		for (const item of items.slice(0, 5)) {
+			const entry = document.createElement("li");
+			entry.textContent = messageText(item);
+			list.appendChild(entry);
+		}
+
+		if (items.length > 5) {
+			const more = document.createElement("li");
+			more.textContent = `+${items.length - 5} more`;
+			list.appendChild(more);
+		}
+
+		section.appendChild(list);
+		return section;
+	}
+
+	function createCard(url) {
+		const card = document.createElement("article");
+		card.className = "result-card is-loading";
+		card.dataset.url = url;
+
+		const header = document.createElement("header");
+		header.className = "card-header";
+
+		const titleWrap = document.createElement("div");
+		const urlLabel = document.createElement("p");
+		urlLabel.className = "card-label";
+		urlLabel.textContent = "Page URL";
+		const title = document.createElement("h3");
+		title.textContent = url;
+		titleWrap.append(urlLabel, title);
+
+		const badges = document.createElement("div");
+		badges.className = "card-badges";
+		badges.append(statusPill("Queued", "neutral"));
+
+		header.append(titleWrap, badges);
+
+		const body = document.createElement("div");
+		body.className = "card-body";
+		const loadingText = document.createElement("p");
+		loadingText.className = "loading-text";
+		loadingText.textContent = "Validating HTML and CSS in parallel...";
+		body.appendChild(loadingText);
+
+		card.append(header, body);
+		return card;
+	}
+
+	function renderCard(card, result) {
+		card.className = `result-card ${result.error ? "has-error" : result.html.valid && result.css.valid ? "is-valid" : "is-invalid"}`;
+
+		const badges = card.querySelector(".card-badges");
+		badges.replaceChildren();
+		badges.append(
+			statusPill(result.error ? "Failed" : result.html.valid && result.css.valid ? "All clear" : "Needs work", result.error ? "danger" : result.html.valid && result.css.valid ? "success" : "warning"),
+			statusPill(`${result.html.count ?? 0} HTML messages`, "neutral"),
+		);
+
+		const body = card.querySelector(".card-body");
+		body.replaceChildren();
+
+		if (result.error) {
+			const errorMessage = document.createElement("p");
+			errorMessage.className = "error-banner";
+			errorMessage.textContent = result.error;
+			body.appendChild(errorMessage);
+			return;
+		}
+
+		const summary = document.createElement("div");
+		summary.className = "summary-grid";
+
+		const htmlStatus = document.createElement("div");
+		htmlStatus.className = "summary-item";
+		htmlStatus.innerHTML = `<span>HTML</span><strong>${result.html.valid ? "Valid" : "Invalid"}</strong><small>${result.html.errors.length} errors, ${result.html.warnings.length} warnings</small>`;
+
+		const cssStatus = document.createElement("div");
+		cssStatus.className = "summary-item";
+		cssStatus.innerHTML = `<span>CSS</span><strong>${result.css.valid ? "Valid" : "Invalid"}</strong><small>${result.css.errors.length} errors, ${result.css.warnings.length} warnings</small>`;
+
+		summary.append(htmlStatus, cssStatus);
+
+		const details = document.createElement("div");
+		details.className = "details-grid";
+		details.append(
+			buildMessageList("HTML errors", result.html.errors, "error"),
+			buildMessageList("HTML warnings", result.html.warnings, "warning"),
+			buildMessageList("CSS errors", result.css.errors, "error"),
+			buildMessageList("CSS warnings", result.css.warnings, "warning"),
+		);
+
+		body.append(summary, details);
+	}
+
+	async function fetchJson(endpoint) {
+		const response = await fetch(endpoint);
+
+		if (!response.ok) {
+			throw new Error(`Request failed with status ${response.status}`);
+		}
+
+		return response.json();
+	}
+
+	async function validateHtml(url) {
+		const endpoint = new URL("https://validator.w3.org/nu/");
+		endpoint.searchParams.set("out", "json");
+		endpoint.searchParams.set("doc", url);
+		return fetchJson(endpoint.toString());
+	}
+
+	async function validateCss(url) {
+		const endpoint = new URL("https://jigsaw.w3.org/css-validator/validator");
+		endpoint.searchParams.set("output", "json");
+		endpoint.searchParams.set("uri", url);
+		return fetchJson(endpoint.toString());
+	}
+
+	async function validatePage(url) {
+		const [htmlResult, cssResult] = await Promise.allSettled([validateHtml(url), validateCss(url)]);
+
+		return {
+			url,
+			html: htmlResult.status === "fulfilled" ? summarizeHtml(htmlResult.value) : { valid: false, errors: [{ message: htmlResult.reason?.message ?? "HTML validation failed." }], warnings: [], count: 0 },
+			css: cssResult.status === "fulfilled" ? summarizeCss(cssResult.value) : { valid: false, errors: [{ message: cssResult.reason?.message ?? "CSS validation failed." }], warnings: [] },
+			error: null,
+		};
+	}
+
+	function setStatus(message) {
+		status.textContent = message;
+	}
+
+	function setLoadingState(isLoading) {
+		form.querySelector('button[type="submit"]').disabled = isLoading;
+		fillExampleButton.disabled = isLoading;
+		clearUrlsButton.disabled = isLoading;
+		results.setAttribute("aria-busy", String(isLoading));
+	}
+
+	function renderPendingCards(urls) {
+		results.replaceChildren();
+		for (const url of urls) {
+			results.appendChild(createCard(url));
+		}
+	}
+
+	form.addEventListener("submit", async (event) => {
+		event.preventDefault();
+
+		const urls = parseUrls(urlsField.value);
+
+		if (urls.length === 0) {
+			results.replaceChildren();
+			setStatus("Add at least one URL to validate.");
+			return;
+		}
+
+		setLoadingState(true);
+		setStatus(`Validating ${urls.length} page${urls.length === 1 ? "" : "s"} with ${urls.length * 2} requests.`);
+		renderPendingCards(urls);
+
+		const pageResults = await Promise.all(urls.map((url) => validatePage(url)));
+
+		for (const [index, result] of pageResults.entries()) {
+			const card = results.children[index];
+			if (card) {
+				renderCard(card, result);
+			}
+		}
+
+		setStatus(`Finished validating ${urls.length} page${urls.length === 1 ? "" : "s"}.`);
+		setLoadingState(false);
+	});
+
+	fillExampleButton.addEventListener("click", () => {
+		urlsField.value = exampleUrls.join("\n");
+		setStatus(`Loaded ${exampleUrls.length} sample URLs.`);
+	});
+
+	clearUrlsButton.addEventListener("click", () => {
+		urlsField.value = "";
+		results.replaceChildren();
+		setStatus("Cleared the URL list.");
+	});
+
+	themeToggle.addEventListener("click", () => {
+		const nextTheme = rootElement.dataset.theme === "dark" ? "light" : "dark";
+		applyTheme(nextTheme);
+	});
+
+	applyTheme(getPreferredTheme());
+
+	urlsField.addEventListener("keydown", (event) => {
+		if (event.key !== "Enter") {
+			return;
+		}
+
+		if (event.shiftKey || event.ctrlKey || event.metaKey) {
+			event.preventDefault();
+			insertTextAtCursor(urlsField, "\n");
+			return;
+		}
+
+		event.preventDefault();
+		form.requestSubmit();
+	});
+</script>
+
+<style>
+	:global(html) {
+		color-scheme: light dark;
+		--page-bg:
+			radial-gradient(circle at top left, rgba(227, 79, 38, 0.18), transparent 28%),
+			radial-gradient(circle at top right, rgba(38, 77, 228, 0.16), transparent 22%),
+			linear-gradient(180deg, #fffaf6 0%, #f3f5ff 45%, #f7f7fb 100%);
+		--text-color: #171923;
+		--muted-color: #4b5563;
+		--subtle-color: #6b7280;
+		--surface-bg: rgba(255, 255, 255, 0.78);
+		--surface-border: rgba(23, 25, 41, 0.08);
+		--panel-bg: rgba(255, 255, 255, 0.84);
+		--panel-shadow: 0 20px 48px rgba(20, 27, 45, 0.08);
+		--input-bg: rgba(255, 255, 255, 0.96);
+		--input-border: rgba(23, 25, 41, 0.14);
+		--secondary-bg: rgba(17, 24, 39, 0.06);
+		--secondary-text: #111827;
+		--card-bg-start: rgba(255, 255, 255, 0.98);
+		--card-bg-end: rgba(248, 250, 255, 0.96);
+		--card-border: rgba(23, 25, 41, 0.1);
+		--card-shadow: 0 12px 28px rgba(20, 27, 45, 0.06);
+		--summary-bg: rgba(17, 24, 39, 0.04);
+		--message-bg: rgba(17, 24, 39, 0.03);
+		--text-strong: #111827;
+		--link-accent: linear-gradient(135deg, #e34f26, #264de4);
+	}
+
+	:global(html[data-theme="dark"]) {
+		--page-bg:
+			radial-gradient(circle at top left, rgba(227, 79, 38, 0.18), transparent 28%),
+			radial-gradient(circle at top right, rgba(38, 77, 228, 0.2), transparent 24%),
+			linear-gradient(180deg, #080b14 0%, #0f172a 46%, #111827 100%);
+		--text-color: #e5e7eb;
+		--muted-color: #cbd5e1;
+		--subtle-color: #94a3b8;
+		--surface-bg: rgba(15, 23, 42, 0.78);
+		--surface-border: rgba(148, 163, 184, 0.14);
+		--panel-shadow: 0 22px 50px rgba(0, 0, 0, 0.34);
+		--input-bg: rgba(2, 6, 23, 0.86);
+		--input-border: rgba(148, 163, 184, 0.24);
+		--secondary-bg: rgba(148, 163, 184, 0.12);
+		--secondary-text: #e5e7eb;
+		--card-bg-start: rgba(15, 23, 42, 0.96);
+		--card-bg-end: rgba(17, 24, 39, 0.94);
+		--card-border: rgba(148, 163, 184, 0.16);
+		--card-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+		--summary-bg: rgba(148, 163, 184, 0.08);
+		--message-bg: rgba(148, 163, 184, 0.06);
+		--text-strong: #f8fafc;
+	}
+
+	:global(html) {
+		background: var(--page-bg);
+	}
+
+	:global(body) {
+		margin: 0;
+		min-height: 100vh;
+		font-family: "Aptos", "Segoe UI", sans-serif;
+		color: var(--text-color);
+	}
+
+	.validator-shell {
+		max-width: 1180px;
+		margin: 0 auto;
+		padding: 48px 20px 72px;
+	}
+
+	.hero-panel {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 24px;
+		align-items: center;
+		padding: 28px;
+		border: 1px solid var(--surface-border);
+		border-radius: 28px;
+		background: var(--surface-bg);
+		box-shadow: 0 24px 64px rgba(20, 27, 45, 0.1);
+		backdrop-filter: blur(18px);
+	}
+
+	.icon-stack {
+		display: grid;
+		gap: 14px;
+	}
+
+	.icon-stack svg {
+		width: 68px;
+		height: 68px;
+		display: block;
+		filter: drop-shadow(0 10px 20px rgba(23, 25, 41, 0.15));
+	}
+
+	.hero-copy h1,
+	.results-header h2 {
+		margin: 0;
+		font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+		font-weight: 800;
+		letter-spacing: -0.04em;
+	}
+
+	.hero-copy h1 {
+		font-size: clamp(2.2rem, 5vw, 4.1rem);
+		line-height: 0.95;
+		max-width: 11ch;
+	}
+
+	.hero-row {
+		display: flex;
+		justify-content: space-between;
+		gap: 16px;
+		align-items: center;
+		margin-bottom: 14px;
+	}
+
+	.eyebrow,
+	.section-label,
+	.card-label {
+		margin: 0 0 8px;
+		font-size: 0.78rem;
+		font-weight: 700;
+		letter-spacing: 0.16em;
+		text-transform: uppercase;
+		color: var(--subtle-color);
+	}
+
+	.lede,
+	.section-hint,
+	.status {
+		max-width: 64ch;
+		margin: 0;
+		font-size: 1rem;
+		line-height: 1.65;
+		color: var(--muted-color);
+	}
+
+	.validator-form,
+	.results-header {
+		margin-top: 24px;
+		padding: 24px;
+		border: 1px solid var(--surface-border);
+		border-radius: 24px;
+		background: var(--surface-bg);
+		box-shadow: var(--panel-shadow);
+		backdrop-filter: blur(18px);
+	}
+
+	.validator-form {
+		display: grid;
+		gap: 14px;
+	}
+
+	.validator-form label {
+		font-weight: 700;
+	}
+
+	.validator-form textarea {
+		width: 100%;
+		min-height: 164px;
+		resize: vertical;
+		padding: 18px 20px;
+		border: 1px solid var(--input-border);
+		border-radius: 18px;
+		background: var(--input-bg);
+		font: inherit;
+		line-height: 1.6;
+		color: var(--text-strong);
+		box-sizing: border-box;
+	}
+
+	.validator-form textarea:focus {
+		outline: 3px solid rgba(38, 77, 228, 0.2);
+		outline-offset: 2px;
+		border-color: rgba(38, 77, 228, 0.45);
+	}
+
+	.form-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 12px;
+	}
+
+	.primary,
+	.secondary {
+		border: 0;
+		border-radius: 999px;
+		padding: 12px 18px;
+		font: inherit;
+		font-weight: 700;
+		cursor: pointer;
+		transition:
+			transform 140ms ease,
+			box-shadow 140ms ease,
+			background 140ms ease;
+	}
+
+	.primary {
+		background: var(--link-accent);
+		color: white;
+		box-shadow: 0 12px 24px rgba(38, 77, 228, 0.22);
+	}
+
+	.secondary {
+		background: var(--secondary-bg);
+		color: var(--secondary-text);
+	}
+
+	.theme-toggle {
+		border: 1px solid var(--surface-border);
+		border-radius: 999px;
+		padding: 10px 14px;
+		font: inherit;
+		font-weight: 700;
+		background: var(--surface-bg);
+		color: var(--text-color);
+		cursor: pointer;
+		transition:
+			transform 140ms ease,
+			background 140ms ease,
+			border-color 140ms ease;
+	}
+
+	.theme-toggle:hover {
+		transform: translateY(-1px);
+	}
+
+	.primary:hover,
+	.secondary:hover {
+		transform: translateY(-1px);
+	}
+
+	.primary:disabled,
+	.secondary:disabled {
+		cursor: not-allowed;
+		opacity: 0.6;
+		transform: none;
+	}
+
+	.status {
+		min-height: 1.5em;
+	}
+
+	.results-header {
+		display: flex;
+		justify-content: space-between;
+		gap: 16px;
+		align-items: end;
+	}
+
+	:global(.results-grid) {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 18px;
+		margin-top: 18px;
+	}
+
+	:global(.result-card) {
+		padding: 20px;
+		border: 1px solid var(--card-border);
+		border-left: 0;
+		border-radius: 20px;
+		background: var(--surface-bg);
+		box-shadow: var(--card-shadow);
+	}
+
+	:global(.result-card.is-loading) {
+		border-style: solid;
+		opacity: 0.98;
+	}
+
+	:global(.result-card.is-loading) {
+		border-style: solid;
+	}
+
+	:global(.result-card.is-valid) {
+		background: var(--surface-bg);
+	}
+
+	:global(.result-card.is-invalid) {
+		background: var(--surface-bg);
+	}
+
+	:global(.result-card.has-error) {
+		background: var(--surface-bg);
+	}
+
+	:global(.card-header) {
+		display: flex;
+		justify-content: space-between;
+		gap: 16px;
+		align-items: start;
+		margin-bottom: 16px;
+	}
+
+	:global(.card-header h3) {
+		margin: 0;
+		font-size: 1rem;
+		line-height: 1.35;
+		word-break: break-word;
+	}
+
+	:global(.card-badges) {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		justify-content: end;
+	}
+
+	:global(.pill) {
+		display: inline-flex;
+		align-items: center;
+		padding: 6px 10px;
+		border-radius: 999px;
+		font-size: 0.76rem;
+		font-weight: 700;
+		line-height: 1;
+	}
+
+	:global(.pill-success) {
+		background: rgba(21, 128, 61, 0.12);
+		color: #166534;
+	}
+
+	:global(.pill-warning) {
+		background: rgba(245, 158, 11, 0.14);
+		color: #92400e;
+	}
+
+	:global(.pill-danger) {
+		background: rgba(220, 38, 38, 0.14);
+		color: #991b1b;
+	}
+
+	:global(.pill-neutral) {
+		background: rgba(17, 24, 39, 0.08);
+		color: #374151;
+	}
+
+	:global(.loading-text),
+	:global(.error-banner),
+	:global(.empty-note) {
+		margin: 0;
+		line-height: 1.6;
+		color: var(--muted-color);
+	}
+
+	.field-help {
+		margin: -6px 0 0;
+		font-size: 0.92rem;
+		line-height: 1.5;
+		color: var(--subtle-color);
+	}
+
+	:global(.error-banner) {
+		padding: 14px 16px;
+		border-radius: 16px;
+		background: rgba(220, 38, 38, 0.1);
+		color: #7f1d1d;
+	}
+
+	:global(.summary-grid) {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 12px;
+		margin-bottom: 16px;
+	}
+
+	:global(.summary-item) {
+		padding: 12px 14px;
+		border-radius: 16px;
+		background: var(--summary-bg);
+	}
+
+	:global(.summary-item span) {
+		display: block;
+		margin-bottom: 6px;
+		font-size: 0.75rem;
+		font-weight: 700;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--subtle-color);
+	}
+
+	:global(.summary-item strong) {
+		display: block;
+		font-size: 1.15rem;
+	}
+
+	:global(.summary-item small) {
+		color: var(--subtle-color);
+	}
+
+	:global(.details-grid) {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 12px;
+	}
+
+	:global(.message-block) {
+		padding: 12px 14px;
+		border-radius: 16px;
+		background: var(--message-bg);
+	}
+
+	:global(.message-block h4) {
+		margin: 0 0 10px;
+		font-size: 0.9rem;
+	}
+
+	:global(.message-list) {
+		margin: 0;
+		padding-left: 18px;
+		line-height: 1.5;
+		color: var(--muted-color);
+	}
+
+	:global(.message-list li + li) {
+		margin-top: 8px;
+	}
+
+	@media (max-width: 760px) {
+		.validator-shell {
+			padding-inline: 16px;
+		}
+
+		.hero-panel,
+		.results-header {
+			grid-template-columns: 1fr;
+			display: grid;
+		}
+
+		.hero-row {
+			align-items: start;
+		}
+
+		.hero-copy h1 {
+			max-width: none;
+		}
+
+		.summary-grid,
+		.details-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.card-header {
+			flex-direction: column;
+		}
+	}
+</style>
